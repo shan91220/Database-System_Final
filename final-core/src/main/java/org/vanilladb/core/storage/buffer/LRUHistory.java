@@ -22,7 +22,10 @@ public class LRUHistory {
 	
 	LRUHistory(BlockId blk, long time){
 		this.blk = blk;
-		this.lastK = -1;  // inf
+		if(k!=1)
+			this.lastK = -1;  // inf
+		else
+			this.lastK = time;
 		pinTime = new ArrayList<Long>();
 		pinTime.add(time);
 		this.access = 1;
