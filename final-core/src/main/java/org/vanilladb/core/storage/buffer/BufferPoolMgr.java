@@ -415,16 +415,16 @@ class BufferPoolMgr {
 	void unpin(Buffer... buffs) {
 		for (Buffer buff : buffs) {
 			try {
-//				timer2++;
+				timer2++;
 				// Get the lock of buffer
 				buff.getExternalLock().lock();
 				buff.unpin();
-//				synchronized (historyMap) {
-//					if(historyMap.containsKey(buff.block())) {
-//						historyMap.get(buff.block()).setTime(timer2, LRU_K);
-//					} else
-//						System.out.println("Unpin error!!!!!!!!!!!");
-//				}
+				synchronized (historyMap) {
+					if(historyMap.containsKey(buff.block())) {
+						historyMap.get(buff.block()).setTime(timer2, LRU_K);
+					} else
+						System.out.println("Unpin error!!!!!!!!!!!");
+				}
 				if (!buff.isPinned())
 					numAvailable.incrementAndGet();
 			} finally {

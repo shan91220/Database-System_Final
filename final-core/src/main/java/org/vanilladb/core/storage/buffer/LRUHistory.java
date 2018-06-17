@@ -32,20 +32,20 @@ public class LRUHistory {
 	public void accessAgain(long time, int k) {
 //		this.access++;
 		pinTime.add(time);
-		if (pinTime.size() >= k) {
-			if(pinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
-			this.lastK = pinTime.get(pinTime.size()-k);
-		}
+//		if (pinTime.size() >= k) {
+//			if(pinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
+//			this.lastK = pinTime.get(pinTime.size()-k);
+//		}
 	}
 	public long getLastKpinTime(int K) {
 		return this.lastK;
 	}
-//	public void setTime(long time, int k) {  // for unpin
-//		unpinTime.add(time);
-//		if (unpinTime.size() >= k) {
-//			if(unpinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
-//			this.lastK = unpinTime.get(unpinTime.size()-k);
-//		}
-//	}
+	public void setTime(long time, int k) {  // for unpin
+		unpinTime.add(time);
+		if (unpinTime.size() >= k) {
+			if(unpinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
+			this.lastK = unpinTime.get(unpinTime.size()-k);
+		}
+	}
 }
 
