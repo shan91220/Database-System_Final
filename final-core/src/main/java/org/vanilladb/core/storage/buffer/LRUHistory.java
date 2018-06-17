@@ -12,34 +12,27 @@ public class LRUHistory {
 	private BlockId blk;
 	private long lastK;
 	private List<Long> pinTime;
-	private int access;
-//	private static final long LRU_K;
+	private List<Long> unpinTime;
+//	private int access;
 	
-//	static {
-//		LRU_K = CoreProperties.getLoader().getPropertyAsLong(BufferPoolMgr.class.getName()
-//				+ ".LRU_K", 2);
-//	}
-	
-	LRUHistory(BlockId blk, long time){
+	LRUHistory(BlockId blk, long time, int k){
 		this.blk = blk;
 		if(k!=1)
 			this.lastK = -1;  // inf
 		else
 			this.lastK = time;
 		pinTime = new ArrayList<Long>();
+		unpinTime = new ArrayList<Long>();
 		pinTime.add(time);
-		this.access = 1;
+//		this.access = 1;
 	}
-//	public boolean isK() {
-//		return hits >= LRU_K;
+//	public int getAccessTime() {
+//		return this.access;
 //	}
-	public int getAccessTime() {
-		return this.access;
-	}
 	public void accessAgain(long time, int k) {
-		this.access++;
+//		this.access++;
 		pinTime.add(time);
-		if (access >= k) {
+		if (pinTime.size() >= k) {
 			if(pinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
 			this.lastK = pinTime.get(pinTime.size()-k);
 		}
@@ -47,5 +40,12 @@ public class LRUHistory {
 	public long getLastKpinTime(int K) {
 		return this.lastK;
 	}
+//	public void setTime(long time, int k) {  // for unpin
+//		unpinTime.add(time);
+//		if (unpinTime.size() >= k) {
+//			if(unpinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
+//			this.lastK = unpinTime.get(unpinTime.size()-k);
+//		}
+//	}
 }
 

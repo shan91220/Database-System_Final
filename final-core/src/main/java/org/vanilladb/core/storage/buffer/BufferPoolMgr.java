@@ -16,14 +16,10 @@
 package org.vanilladb.core.storage.buffer;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41,12 +37,14 @@ class BufferPoolMgr {
 	private HashMap<BlockId, LRUHistory> historyMap;
 	private List<BufferQueue> buffQueue;
 	private long timer;
+	private long timer2;
 	private int maxHistory;
 	private volatile int lastReplacedBuff;
 	private AtomicInteger numAvailable;
 	// Optimization: Lock striping
 	private Object[] anchors = new Object[1009];
 	private static final int LRU_K;
+	private List<BufferQueue> buffQueueOrder;
 	
 	static {
 		LRU_K = CoreProperties.getLoader().getPropertyAsInteger(BufferPoolMgr.class.getName()
@@ -72,8 +70,10 @@ class BufferPoolMgr {
 		numAvailable = new AtomicInteger(numBuffs);
 		lastReplacedBuff = 0;
 		timer = 0;
+		timer2 = 0;
 		maxHistory = numBuffs*2;
 		buffQueue = new ArrayList<BufferQueue>();
+		buffQueueOrder = new ArrayList<BufferQueue>();
 		for (int i = 0; i < numBuffs; i++)
 			bufferPool[i] = new Buffer();
 
@@ -149,7 +149,7 @@ class BufferPoolMgr {
 				int lastReplacedBuff = this.lastReplacedBuff;
 				int currBlk = (lastReplacedBuff + 1) % bufferPool.length;
 				// Clock if bufferPool is not full
-				if(lastReplacedBuff <= bufferPool.length) {
+				if(lastReplacedBuff < bufferPool.length) {
 					while (currBlk != lastReplacedBuff) {
 						buff = bufferPool[currBlk];
 						
@@ -173,8 +173,10 @@ class BufferPoolMgr {
 									buff.pin();
 									BufferQueue bfq = new BufferQueue(blk, currBlk);
 									buffQueue.add(bfq);
-									LRUHistory his = new LRUHistory(blk, timer);
+									bfq = null;
+									LRUHistory his = new LRUHistory(blk, timer, LRU_K);
 									historyMap.put(blk, his);
+									his = null;
 									return buff;
 								}
 							} finally {
@@ -188,48 +190,9 @@ class BufferPoolMgr {
 				} else { // swap using LRU-K
 					return findSwapBuffer(timer, blk, null, null); // LRU-K
 				}
-
-				// Choose Unpinned Buffer
-				// clock strategy
-//				int lastReplacedBuff = this.lastReplacedBuff;
-//				int currBlk = (lastReplacedBuff + 1) % bufferPool.length;
-//				while (currBlk != lastReplacedBuff) {
-//					buff = bufferPool[currBlk];
-//					
-//					// Get the lock of buffer if it is free
-//					if (buff.getExternalLock().tryLock()) {
-//						try {
-//							// Check if there is no one use it
-//							if (!buff.isPinned()) {
-//								this.lastReplacedBuff = currBlk;
-//								
-//								// Swap
-//								BlockId oldBlk = buff.block();
-//								if (oldBlk != null)
-//									blockMap.remove(oldBlk);
-//								buff.assignToBlock(blk);
-//								blockMap.put(blk, buff);
-//								if (!buff.isPinned())
-//									numAvailable.decrementAndGet();
-//								
-//								// Pin this buffer
-//								buff.pin();
-//								buffQueue.add(blk);
-//								return buff;
-//							}
-//						} finally {
-//							// Release the lock of buffer
-//							buff.getExternalLock().unlock();
-//						}
-//					}
-//					currBlk = (currBlk + 1) % bufferPool.length;
-//				}
-//				return null;
 				
 			// If it exists(no need to do I/O)
 			} else {
-				
-				// update history access times
 				
 				// Get the lock of buffer
 				buff.getExternalLock().lock();
@@ -258,19 +221,16 @@ class BufferPoolMgr {
 		}
 	}
 	Buffer findSwapBuffer(long time, BlockId newBlk, String fileName, PageFormatter fmtr) {
-		HashMap<Integer, Long> validBuff = new HashMap<Integer, Long>();
-		LinkedHashMap<Integer, Long> sortedMap = new LinkedHashMap<>();
-		List<Integer> tracingBuffOrder = new ArrayList<>();
-		int findIndex = -1;
-		long maxdis = 0;
+		HashMap<BufferQueue, Long> validBuffQueue = new HashMap<BufferQueue, Long>();
+		
+		if(buffQueue.size() != bufferPool.length) System.out.println("BufferQueue size wrong!!!!!!!!!!");
 		for(BufferQueue buffq: buffQueue) {
 			// 1. put new blk to buffQueue 2. history need to update 3. return bufferPool's  buff
 			BlockId blk = buffq.getBlockId();
 			int index = buffq.getIndex(); // BufferPool index
 			if(historyMap.containsKey(blk)) {
 				if(historyMap.get(blk).getLastKpinTime(LRU_K) < 0) { // inf(return)
-					findIndex = index;
-					Buffer buf = bufferPool[findIndex];
+					Buffer buf = bufferPool[index];
 					// Get the lock of buffer if it is free
 					if (buf.getExternalLock().tryLock()) {
 						try {
@@ -295,9 +255,11 @@ class BufferPoolMgr {
 								if(historyMap.containsKey(buf.block())) {  // access before
 									historyMap.get(buf.block()).accessAgain(timer, LRU_K);
 								} else {  // never access
-									LRUHistory his = new LRUHistory(buf.block(), timer);
+									LRUHistory his = new LRUHistory(buf.block(), timer, LRU_K);
 									historyMap.put(buf.block(), his);
+									his = null;
 								}
+								validBuffQueue = null; // clear
 								return buf;
 							}
 						} finally {
@@ -306,23 +268,18 @@ class BufferPoolMgr {
 						}
 					}
 				} else { // not inf
-					validBuff.put(index, historyMap.get(blk).getLastKpinTime(LRU_K));
-					if(historyMap.get(blk).getLastKpinTime(LRU_K) > maxdis) { // update blk to be swapped
-						findIndex = index;
-						maxdis = historyMap.get(blk).getLastKpinTime(LRU_K);
-					}
+					validBuffQueue.put(buffq, historyMap.get(blk).getLastKpinTime(LRU_K));
 				}
 			}
 			else { // blk never been accessed
 				System.out.println("historMap should include the block!!!!");
 			}
 		}
-		// find the maxdis to replace if there is no inf
-		if (findIndex < 0) System.out.println("findIndex should > 0!!!!!!!!!!");
 		// sort validBuff by historyMap.get(blk).getLastKpinTime(LRU_K) -> to tracingBuffOrder
-		validBuff.entrySet().stream().sorted(Map.Entry.comparingByValue()).forEachOrdered(x -> tracingBuffOrder.add(x.getKey()));
-		for(int buffindex: tracingBuffOrder) {
-			Buffer buf = bufferPool[buffindex];
+		buffQueueOrder.clear();
+		validBuffQueue.entrySet().stream().sorted(Map.Entry.<BufferQueue, Long>comparingByValue().reversed()).forEachOrdered(x -> buffQueueOrder.add(x.getKey()));
+		for(BufferQueue bufq: buffQueueOrder) {
+			Buffer buf = bufferPool[bufq.getIndex()];
 			// Get the lock of buffer if it is free
 			if (buf.getExternalLock().tryLock()) {
 				try {
@@ -343,17 +300,15 @@ class BufferPoolMgr {
 						
 						// Pin this buffer
 						buf.pin();
-						for(BufferQueue buffq: buffQueue) {
-							if(buffq.getIndex() == buffindex) {
-								buffq.setBlockId(buf.block());
-							}
-						}
+						bufq.setBlockId(buf.block());
 						if(historyMap.containsKey(buf.block())) {  // access before
 							historyMap.get(buf.block()).accessAgain(timer, LRU_K);
 						} else {  // never access
-							LRUHistory his = new LRUHistory(buf.block(), timer);
+							LRUHistory his = new LRUHistory(buf.block(), timer, LRU_K);
 							historyMap.put(buf.block(), his);
+							his = null;
 						}
+						validBuffQueue = null; // clear
 						return buf;
 					} 
 				} finally {
@@ -362,114 +317,10 @@ class BufferPoolMgr {
 				}
 			}
 		}
+		validBuffQueue = null; //clear
 		return null;
 	}
-//	void dispalce(BlockId blk, Buffer buff) {
-//		if(historyMap.containsKey(blk)) {
-//			historyMap.get(blk).setHits();
-//			historyMap.get(blk).setTime(timer);
-//		}
-//		int index = -1;
-//		for (int i=0 ; i<bufferPool.length ; i++) {
-//			if (bufferPool[i] == buff) {
-//				index = i;
-//			}
-//		}
-//		if(index == -1) {
-//			System.out.println("No buff in bufferPool!!!!!!");
-//		}
-//		List<BufferQueue> remove = new ArrayList<BufferQueue>();
-//		for (BufferQueue bfq: buffQueue) {
-//			if(bfq.getBlockId() == blk) {
-//				remove.add(bfq);
-//			}
-//		}
-//		buffQueue.removeAll(remove);
-//		BufferQueue bufq = new BufferQueue(blk, index);
-//		buffQueue.add(bufq);
-//	}
-//	Buffer replaceBuff(BlockId blk) {
-//		// LRU-K strategy
-//		if (buffQueue.size() != bufferPool.length)
-//			System.out.println("BufferQueue size is wrong!!!!!!");
-//		for(int i = 0 ; i<buffQueue.size() ; i++) {
-//			BufferQueue bq = buffQueue.get(i);
-////			Buffer buff = blockMap.get(bq.getBlockId());
-//			Buffer buff = bufferPool[bq.getIndex()];
-//			
-//			if (buff.getExternalLock().tryLock()) {
-//				try {
-//					// Check if there is no one use it
-//					if (!buff.isPinned()) {
-//						
-//						// add bufferQueue in tail
-//						BufferQueue bfq = new BufferQueue(blk, bq.getIndex());
-//						buffQueue.add(bfq);
-//						// Swap
-//						BlockId oldBlk = buff.block();
-//						if (oldBlk != null) {
-//							blockMap.remove(oldBlk);
-//							buffQueue.remove(bq); // remove bufferQueue from head which is unpinned
-//						}
-//						buff.assignToBlock(blk);
-//						//add history
-//						historyMap.get(blk).setHits();
-//						historyMap.get(blk).setTime(timer);
-//						
-//						blockMap.put(blk, buff);
-//						if (!buff.isPinned())
-//							numAvailable.decrementAndGet();
-//						
-//						// Pin this buffer
-//						buff.pin();
-//						return buff;
-//					}
-//				} finally {
-//					// Release the lock of buffer
-//					buff.getExternalLock().unlock();
-//				}
-//			}
-//		}
-//		return null;
-//	}
-//	Buffer addToBuffer(BlockId blk, int lastReplacedBuff) {
-//		if (lastReplacedBuff >= bufferPool.length) { // 防呆
-//			System.out.println("BufferQueue size should be less than bufferPool!!!!!!");
-//		}
-//		Buffer buff = bufferPool[lastReplacedBuff];
-//		if (buff.getExternalLock().tryLock()) {
-//			try {
-//				// Check if there is no one use it
-//				if (!buff.isPinned()) {
-//					// add BufferQueue to tail
-//					BufferQueue bfq = new BufferQueue(blk, lastReplacedBuff);
-//					buffQueue.add(bfq);
-//					// Swap
-//					BlockId oldBlk = buff.block();
-//					if (oldBlk != null) {
-//						blockMap.remove(oldBlk); // 理論上不需要
-//					}
-//					buff.assignToBlock(blk);
-//					//add history
-//					historyMap.get(blk).setHits();
-//					historyMap.get(blk).setTime(timer);
-//					
-//					blockMap.put(blk, buff);
-//					if (!buff.isPinned())
-//						numAvailable.decrementAndGet();
-//					
-//					// Pin this buffer
-//					buff.pin();
-//					this.lastReplacedBuff++;
-//					return buff;
-//				}
-//			} finally {
-//				// Release the lock of buffer
-//				buff.getExternalLock().unlock();
-//			}
-//		}
-//		return null;
-//	}
+
 	/**
 	 * Allocates a new block in the specified file, and pins a buffer to it.
 	 * Returns null (without allocating the block) if there are no available
@@ -485,12 +336,12 @@ class BufferPoolMgr {
 		// Only the txs acquiring to append the block on the same file will be blocked
 		synchronized (prepareAnchor(fileName)) {
 			timer++;
-			// Choose Unpinned Buffer
+			
 			// LRU-K strategy
 			int lastReplacedBuff = this.lastReplacedBuff;
 			int currBlk = (lastReplacedBuff + 1) % bufferPool.length;
 			// Clock if bufferPool is not full
-			if(lastReplacedBuff <= bufferPool.length) {
+			if(lastReplacedBuff < bufferPool.length) {
 				while (currBlk != lastReplacedBuff) {
 					Buffer buff = bufferPool[currBlk];
 					
@@ -513,8 +364,10 @@ class BufferPoolMgr {
 								buff.pin();
 								BufferQueue bfq = new BufferQueue(buff.block(), currBlk);
 								buffQueue.add(bfq);
-								LRUHistory his = new LRUHistory(buff.block(), timer);
+								bfq = null;
+								LRUHistory his = new LRUHistory(buff.block(), timer, LRU_K);
 								historyMap.put(buff.block(), his);
+								his = null;
 								return buff;
 							}
 						} finally {
@@ -528,39 +381,6 @@ class BufferPoolMgr {
 			} else { // swap using LRU-K
 				return findSwapBuffer(timer, null, fileName, fmtr); // LRU-K
 			}
-			// clock strategy
-//			int lastReplacedBuff = this.lastReplacedBuff;
-//			int currBlk = (lastReplacedBuff + 1) % bufferPool.length;
-//			while (currBlk != lastReplacedBuff) {
-//				Buffer buff = bufferPool[currBlk];
-//				
-//				// Get the lock of buffer if it is free
-//				if (buff.getExternalLock().tryLock()) {
-//					try {
-//						if (!buff.isPinned()) {
-//							this.lastReplacedBuff = currBlk;
-//							
-//							// Swap
-//							BlockId oldBlk = buff.block();
-//							if (oldBlk != null)
-//								blockMap.remove(oldBlk);
-//							buff.assignToNew(fileName, fmtr);
-//							blockMap.put(buff.block(), buff);
-//							if (!buff.isPinned())
-//								numAvailable.decrementAndGet();
-//							
-//							// Pin this buffer
-//							buff.pin();
-//							return buff;
-//						}
-//					} finally {
-//						// Release the lock of buffer
-//						buff.getExternalLock().unlock();
-//					}
-//				}
-//				currBlk = (currBlk + 1) % bufferPool.length;
-//			}
-//			return null;
 		}
 	}
 
@@ -595,9 +415,16 @@ class BufferPoolMgr {
 	void unpin(Buffer... buffs) {
 		for (Buffer buff : buffs) {
 			try {
+//				timer2++;
 				// Get the lock of buffer
 				buff.getExternalLock().lock();
 				buff.unpin();
+//				synchronized (historyMap) {
+//					if(historyMap.containsKey(buff.block())) {
+//						historyMap.get(buff.block()).setTime(timer2, LRU_K);
+//					} else
+//						System.out.println("Unpin error!!!!!!!!!!!");
+//				}
 				if (!buff.isPinned())
 					numAvailable.incrementAndGet();
 			} finally {
