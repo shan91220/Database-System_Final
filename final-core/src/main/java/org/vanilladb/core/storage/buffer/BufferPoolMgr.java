@@ -14,7 +14,6 @@
  * limitations under the License.
  ******************************************************************************/
 package org.vanilladb.core.storage.buffer;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -154,65 +153,74 @@ class BufferPoolMgr {
 			// If there is no such buffer // 1. buffer還沒滿（剛開機） 2. buffer滿了要swap
 			if (buff == null) {
 				
-				buffOrder.clear();
-				if (validBuff.size() != bufferPool.length) System.out.println("validBuff.size() wrong!!!!!!!");
-				validBuff.entrySet().stream().sorted(Map.Entry.<Integer, Long>comparingByValue()).forEachOrdered(x -> buffOrder.add(x.getKey()));
-				if (buffOrder.size() != bufferPool.length) System.out.println("buffOrder.size() wrong!!!!!!!"+buffOrder.size());
-
-				for(Integer index: buffOrder) {
-					Buffer b = bufferPool[index];
-					if (b.getExternalLock().tryLock()) {
-						try {
-							// Check if there is no one use it
-							if (!b.isPinned()) {
-								
-								// Swap
-								BlockId oldBlk = b.block();
-								if (oldBlk != null) {
-									blockMap.remove(oldBlk);
-									if(historyMap.containsKey(oldBlk)) {
-										historyMap.get(oldBlk).setIndex(-1); // swap out of bufferPool
-									} else {
-										System.out.println("HistoryMap should contain the block!!!!!!!");
-									}
-								}
-								b.assignToBlock(blk);
-								if (b.block() != blk)
-									System.out.println("blockId wrong!!!!!!!");
-								blockMap.put(blk, b);
-								if (!b.isPinned())
-									numAvailable.decrementAndGet();
-								
-								// Pin this buffer
-//								synchronized(historyMap) {
-								b.pin();
-								if(historyMap.containsKey(blk)) {  // access before
-									historyMap.get(blk).setIndex(index);
-									historyMap.get(blk).accessAgain(timer, LRU_K);
-									if(validBuff.containsKey(index)) {
-										validBuff.replace(index, historyMap.get(blk).getLastKpinTime());
-									} else {
-										System.out.println("1. validBuff should contain the index!!!!!!!");
-									}
-								} else {  // never access
-									LRUHistory his = new LRUHistory(blk, timer, LRU_K, index);
-									historyMap.put(blk, his);
-									if(validBuff.containsKey(index)) {
-										validBuff.replace(index, historyMap.get(blk).getLastKpinTime());
-									} else {
-										System.out.println("2. validBuff should contain the index!!!!!!!");
-									}
-//									his = null;
-								}
-//								}
-								return b;
-							}
-						} finally {
-							// Release the lock of buffer
-							b.getExternalLock().unlock();
+				synchronized (validBuff) {
+					synchronized (buffOrder) {
+						buffOrder.clear();
+						if (validBuff.size() != bufferPool.length) System.out.println("validBuff.size() wrong!!!!!!!");
+		//				System.out.println("validBuff size(): "+validBuff.size());
+						validBuff.entrySet().stream().sorted(Map.Entry.<Integer, Long>comparingByValue()).forEachOrdered(x -> buffOrder.add(x.getKey()));
+		//				System.out.println("buffOrder size(): "+buffOrder.size());
+						if (buffOrder.size() != bufferPool.length) {
+							System.out.println("validBuff size(): "+validBuff.size());
+							System.out.println("buffOrder.size() wrong!!!!!!!"+buffOrder.size());
 						}
-					}
-				}
+		
+						for(Integer index: buffOrder) {
+							Buffer b = bufferPool[index];
+							if (b.getExternalLock().tryLock()) {
+								try {
+									// Check if there is no one use it
+									if (!b.isPinned()) {
+										
+										// Swap
+										BlockId oldBlk = b.block();
+										if (oldBlk != null) {
+											blockMap.remove(oldBlk);
+											if(historyMap.containsKey(oldBlk)) {
+												historyMap.get(oldBlk).setIndex(-1); // swap out of bufferPool
+											} else {
+												System.out.println("HistoryMap should contain the block!!!!!!!");
+											}
+										}
+										b.assignToBlock(blk);
+										if (b.block() != blk)
+											System.out.println("blockId wrong!!!!!!!");
+										blockMap.put(blk, b);
+										if (!b.isPinned())
+											numAvailable.decrementAndGet();
+										
+										// Pin this buffer
+		//								synchronized(historyMap) {
+										b.pin();
+										if(historyMap.containsKey(blk)) {  // access before
+											historyMap.get(blk).setIndex(index);
+											historyMap.get(blk).accessAgain(timer, LRU_K);
+											if(validBuff.containsKey(index)) {
+												validBuff.replace(index, historyMap.get(blk).getLastKpinTime());
+											} else {
+												System.out.println("1. validBuff should contain the index!!!!!!!");
+											}
+										} else {  // never access
+											LRUHistory his = new LRUHistory(blk, timer, LRU_K, index);
+											historyMap.put(blk, his);
+											if(validBuff.containsKey(index)) {
+												validBuff.replace(index, historyMap.get(blk).getLastKpinTime());
+											} else {
+												System.out.println("2. validBuff should contain the index!!!!!!!");
+											}
+		//									his = null;
+										}
+		//								}
+										return b;
+									}
+								} finally {
+									// Release the lock of buffer
+									b.getExternalLock().unlock();
+								}
+							}
+						}
+					}  // synchronized
+				}  // synchronized
 				return null;
 				
 			// If it exists(no need to do I/O)
@@ -271,60 +279,63 @@ class BufferPoolMgr {
 //					if (historyMap.size() != 0)	clearHistory();
 //				}
 //			}
-			
-			// LRU-K strategy
-			buffOrder.clear();
-			validBuff.entrySet().stream().sorted(Map.Entry.<Integer, Long>comparingByValue()).forEachOrdered(x -> buffOrder.add(x.getKey()));
-			if (buffOrder.size() != bufferPool.length) System.out.println("2. buffOrder.size() wrong!!!!!!!");
-			if (validBuff.size() != bufferPool.length) System.out.println("2. validBuff.size() wrong!!!!!!!");
-			for(Integer index: buffOrder) {
-				Buffer b = bufferPool[index];
-				if (b.getExternalLock().tryLock()) {
-					try {
-						// Check if there is no one use it
-						if (!b.isPinned()) {
-							
-							// Swap
-							BlockId oldBlk = b.block();
-							if (oldBlk != null) {
-								blockMap.remove(oldBlk);
-								if(historyMap.containsKey(oldBlk)) {
-									historyMap.get(oldBlk).setIndex(-1); // swap out of bufferPool
-								} else {
-									System.out.println("2. HistoryMap should contain the block!!!!!!!");
+			synchronized (validBuff) {
+				synchronized (buffOrder) {
+					// LRU-K strategy
+					buffOrder.clear();
+					validBuff.entrySet().stream().sorted(Map.Entry.<Integer, Long>comparingByValue()).forEachOrdered(x -> buffOrder.add(x.getKey()));
+					if (buffOrder.size() != bufferPool.length) System.out.println("2. buffOrder.size() wrong!!!!!!!");
+					if (validBuff.size() != bufferPool.length) System.out.println("2. validBuff.size() wrong!!!!!!!");
+					for(Integer index: buffOrder) {
+						Buffer b = bufferPool[index];
+						if (b.getExternalLock().tryLock()) {
+							try {
+								// Check if there is no one use it
+								if (!b.isPinned()) {
+									
+									// Swap
+									BlockId oldBlk = b.block();
+									if (oldBlk != null) {
+										blockMap.remove(oldBlk);
+										if(historyMap.containsKey(oldBlk)) {
+											historyMap.get(oldBlk).setIndex(-1); // swap out of bufferPool
+										} else {
+											System.out.println("2. HistoryMap should contain the block!!!!!!!");
+										}
+									}
+									b.assignToNew(fileName, fmtr);
+									blockMap.put(b.block(), b);
+									if (!b.isPinned())
+										numAvailable.decrementAndGet();
+									
+									// Pin this buffer
+		//							synchronized(historyMap) {
+									b.pin();
+									if(historyMap.containsKey(b.block())) {  // access before
+										System.out.println("HistoryMap should not access the block before!!!!!!!");
+									} else {  // never access
+										LRUHistory his = new LRUHistory(b.block(), timer, LRU_K, index);
+										historyMap.put(b.block(), his);
+										if(validBuff.containsKey(index)) {
+											validBuff.replace(index, historyMap.get(b.block()).getLastKpinTime());
+										} else {
+											System.out.println("4. validBuff should contain the index!!!!!!!");
+										}
+		//								his = null;
+									}
+		//							}
+									return b;
 								}
+							} finally {
+								// Release the lock of buffer
+								b.getExternalLock().unlock();
 							}
-							b.assignToNew(fileName, fmtr);
-							blockMap.put(b.block(), b);
-							if (!b.isPinned())
-								numAvailable.decrementAndGet();
-							
-							// Pin this buffer
-//							synchronized(historyMap) {
-							b.pin();
-							if(historyMap.containsKey(b.block())) {  // access before
-								System.out.println("HistoryMap should not access the block before!!!!!!!");
-							} else {  // never access
-								LRUHistory his = new LRUHistory(b.block(), timer, LRU_K, index);
-								historyMap.put(b.block(), his);
-								if(validBuff.containsKey(index)) {
-									validBuff.replace(index, historyMap.get(b.block()).getLastKpinTime());
-								} else {
-									System.out.println("4. validBuff should contain the index!!!!!!!");
-								}
-//								his = null;
-							}
-//							}
-							return b;
 						}
-					} finally {
-						// Release the lock of buffer
-						b.getExternalLock().unlock();
 					}
+					return null;
 				}
-			}
-			return null;
-		}
+			} // synchronized
+		} // synchronized
 	}
 
 	void clearHistory() {
