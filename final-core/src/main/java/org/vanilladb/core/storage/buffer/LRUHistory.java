@@ -10,12 +10,14 @@ import org.vanilladb.core.util.CoreProperties;
 
 public class LRUHistory {
 	private BlockId blk;
+	private int index;
 	private long lastK;
 	private List<Long> pinTime;
 	private List<Long> unpinTime;
 //	private int access;
 	
-	LRUHistory(BlockId blk, long time, int k){
+	LRUHistory(BlockId blk, long time, int k, int index){
+		this.index = index;
 		this.blk = blk;
 		if(k!=1)
 			this.lastK = -1;  // inf
@@ -29,16 +31,22 @@ public class LRUHistory {
 	public BlockId getBlockId() {
 		return blk;
 	}
+	public void setIndex(int index) {
+		this.index = index;
+	}
+	public int getIndex() {
+		return this.index;
+	}
 //	public int getAccessTime() {
 //		return this.access;
 //	}
 	public void accessAgain(long time, int k) {
 //		this.access++;
 		pinTime.add(time);
-//		if (pinTime.size() >= k) {
-//			if(pinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
-//			this.lastK = pinTime.get(pinTime.size()-k);
-//		}
+		if (pinTime.size() >= k) {
+			if(pinTime.size()-k < 0)  System.out.println("Error!!!!!!!!!!");
+			this.lastK = pinTime.get(pinTime.size()-k);
+		}
 	}
 	public long getLastKpinTime() {
 		return this.lastK;
