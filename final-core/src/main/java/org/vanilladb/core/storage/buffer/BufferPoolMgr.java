@@ -17,9 +17,11 @@ package org.vanilladb.core.storage.buffer;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -44,7 +46,6 @@ class BufferPoolMgr {
 	// Optimization: Lock striping
 	private Object[] anchors = new Object[1009];
 	private static final int LRU_K;
-	private List<BufferQueue> buffQueueOrder;
 	
 	static {
 		LRU_K = CoreProperties.getLoader().getPropertyAsInteger(BufferPoolMgr.class.getName()
@@ -73,7 +74,6 @@ class BufferPoolMgr {
 		timer2 = 0;
 		maxHistory = numBuffs*2;
 		buffQueue = new ArrayList<BufferQueue>();
-		buffQueueOrder = new ArrayList<BufferQueue>();
 		for (int i = 0; i < numBuffs; i++)
 			bufferPool[i] = new Buffer();
 
@@ -138,7 +138,9 @@ class BufferPoolMgr {
 		synchronized (prepareAnchor(blk)) {
 			timer++;
 //			if(timer % 1000 == 0) {
-//				if (historyMap.size() != 0)	clearHistory();
+//				synchronized (historyMap) {
+//					if (historyMap.size() != 0)	clearHistory();
+//				}
 //			}
 			// Find existing buffer
 			Buffer buff = findExistingBuffer(blk);
@@ -173,10 +175,10 @@ class BufferPoolMgr {
 									buff.pin();
 									BufferQueue bfq = new BufferQueue(blk, currBlk);
 									buffQueue.add(bfq);
-									bfq = null;
+//									bfq = null;
 									LRUHistory his = new LRUHistory(blk, timer, LRU_K);
 									historyMap.put(blk, his);
-									his = null;
+//									his = null;
 									return buff;
 								}
 							} finally {
@@ -188,6 +190,8 @@ class BufferPoolMgr {
 					}
 					return null;
 				} else { // swap using LRU-K
+//					System.out.println("findSwapBuffer!!!!"+" lastReplacedBuff: "+lastReplacedBuff+
+//							" bufferPool.length: "+bufferPool.length);
 					return findSwapBuffer(timer, blk, null, null); // LRU-K
 				}
 				
@@ -207,7 +211,7 @@ class BufferPoolMgr {
 						if(historyMap.containsKey(blk)) {  // access before
 							historyMap.get(blk).accessAgain(timer, LRU_K);
 						} else {  // never access
-							System.out.println("historMap should include the block!!!!");
+							System.out.println("1.historMap should include the block!!!!");
 						}
 						return buff;
 					}
@@ -229,7 +233,7 @@ class BufferPoolMgr {
 			BlockId blk = buffq.getBlockId();
 			int index = buffq.getIndex(); // BufferPool index
 			if(historyMap.containsKey(blk)) {
-				if(historyMap.get(blk).getLastKpinTime(LRU_K) < 0) { // inf(return)
+				if(historyMap.get(blk).getLastKpinTime() < 0) { // inf(return)
 					Buffer buf = bufferPool[index];
 					// Get the lock of buffer if it is free
 					if (buf.getExternalLock().tryLock()) {
@@ -257,9 +261,8 @@ class BufferPoolMgr {
 								} else {  // never access
 									LRUHistory his = new LRUHistory(buf.block(), timer, LRU_K);
 									historyMap.put(buf.block(), his);
-									his = null;
 								}
-								validBuffQueue = null; // clear
+//								validBuffQueue = null; // clear
 								return buf;
 							}
 						} finally {
@@ -268,16 +271,17 @@ class BufferPoolMgr {
 						}
 					}
 				} else { // not inf
-					validBuffQueue.put(buffq, historyMap.get(blk).getLastKpinTime(LRU_K));
+					validBuffQueue.put(buffq, historyMap.get(blk).getLastKpinTime());
 				}
 			}
 			else { // blk never been accessed
-				System.out.println("historMap should include the block!!!!");
+				System.out.println("2.historMap should include the block!!!!");
 			}
 		}
 		// sort validBuff by historyMap.get(blk).getLastKpinTime(LRU_K) -> to tracingBuffOrder
-		buffQueueOrder.clear();
-		validBuffQueue.entrySet().stream().sorted(Map.Entry.<BufferQueue, Long>comparingByValue().reversed()).forEachOrdered(x -> buffQueueOrder.add(x.getKey()));
+		List<BufferQueue> buffQueueOrder = new ArrayList<BufferQueue>();;
+		validBuffQueue.entrySet().stream().sorted(Map.Entry.<BufferQueue, Long>comparingByValue()).forEachOrdered(x -> buffQueueOrder.add(x.getKey()));
+		
 		for(BufferQueue bufq: buffQueueOrder) {
 			Buffer buf = bufferPool[bufq.getIndex()];
 			// Get the lock of buffer if it is free
@@ -306,9 +310,9 @@ class BufferPoolMgr {
 						} else {  // never access
 							LRUHistory his = new LRUHistory(buf.block(), timer, LRU_K);
 							historyMap.put(buf.block(), his);
-							his = null;
+//							his = null;
 						}
-						validBuffQueue = null; // clear
+//						validBuffQueue = null; // clear
 						return buf;
 					} 
 				} finally {
@@ -317,7 +321,7 @@ class BufferPoolMgr {
 				}
 			}
 		}
-		validBuffQueue = null; //clear
+//		validBuffQueue = null; //clear
 		return null;
 	}
 
@@ -336,6 +340,11 @@ class BufferPoolMgr {
 		// Only the txs acquiring to append the block on the same file will be blocked
 		synchronized (prepareAnchor(fileName)) {
 			timer++;
+//			if(timer % 1000 == 0) {
+//				synchronized (historyMap) {
+//					if (historyMap.size() != 0)	clearHistory();
+//				}
+//			}
 			
 			// LRU-K strategy
 			int lastReplacedBuff = this.lastReplacedBuff;
@@ -364,10 +373,10 @@ class BufferPoolMgr {
 								buff.pin();
 								BufferQueue bfq = new BufferQueue(buff.block(), currBlk);
 								buffQueue.add(bfq);
-								bfq = null;
+//								bfq = null;
 								LRUHistory his = new LRUHistory(buff.block(), timer, LRU_K);
 								historyMap.put(buff.block(), his);
-								his = null;
+//								his = null;
 								return buff;
 							}
 						} finally {
@@ -384,11 +393,28 @@ class BufferPoolMgr {
 		}
 	}
 
-//	void clearHistory() {
+	void clearHistory() {
 //		long timeSum = 0;
 //		long timeAvg = 0;
 //		long timeSquareSum = 0;
 //		double timeStandard = 0;
+		HashMap<LRUHistory, Long> sortHistory = new HashMap<LRUHistory, Long>();
+		List<LRUHistory> LRUhisOrder = new ArrayList<LRUHistory>();
+		for (Iterator<Entry<BlockId, LRUHistory>> it = historyMap.entrySet().iterator(); it.hasNext();){
+		    Map.Entry<BlockId, LRUHistory> item = it.next();
+		    LRUHistory val = item.getValue();
+		    sortHistory.put(val, val.getLastKpinTime());
+		}
+		sortHistory.entrySet().stream().sorted(Map.Entry.<LRUHistory, Long>comparingByValue()).forEachOrdered(x -> LRUhisOrder.add(x.getKey()));
+		if (historyMap.size() > maxHistory) {
+			// sort by value
+			sortHistory.entrySet().stream().sorted(Map.Entry.<LRUHistory, Long>comparingByValue()).forEachOrdered(x -> LRUhisOrder.add(x.getKey()));
+			for (int j = 0; j<historyMap.size()-maxHistory ;j++) {
+				BlockId blk_remove = LRUhisOrder.get(j).getBlockId();
+				historyMap.remove(blk_remove);
+			}
+		}
+//		sortHistory = null;
 //		for (Iterator<Entry<BlockId, LRUHistory>> it = historyMap.entrySet().iterator(); it.hasNext();){
 //		    Map.Entry<BlockId, LRUHistory> item = it.next();
 //		    LRUHistory val = item.getValue();
@@ -405,7 +431,7 @@ class BufferPoolMgr {
 //		    		it.remove();
 //		    }
 //		}
-//	}
+	}
 	/**
 	 * Unpins the specified buffers.
 	 * 
@@ -419,12 +445,12 @@ class BufferPoolMgr {
 				// Get the lock of buffer
 				buff.getExternalLock().lock();
 				buff.unpin();
-				synchronized (historyMap) {
-					if(historyMap.containsKey(buff.block())) {
+				if(historyMap.containsKey(buff.block())) {
+					synchronized (historyMap.get(buff.block())) {
 						historyMap.get(buff.block()).setTime(timer2, LRU_K);
-					} else
-						System.out.println("Unpin error!!!!!!!!!!!");
-				}
+					}
+				} else
+					System.out.println("Unpin error!!!!!!!!!!!");
 				if (!buff.isPinned())
 					numAvailable.incrementAndGet();
 			} finally {

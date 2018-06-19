@@ -26,6 +26,9 @@ public class LRUHistory {
 		pinTime.add(time);
 //		this.access = 1;
 	}
+	public BlockId getBlockId() {
+		return blk;
+	}
 //	public int getAccessTime() {
 //		return this.access;
 //	}
@@ -37,7 +40,7 @@ public class LRUHistory {
 //			this.lastK = pinTime.get(pinTime.size()-k);
 //		}
 	}
-	public long getLastKpinTime(int K) {
+	public long getLastKpinTime() {
 		return this.lastK;
 	}
 	public void setTime(long time, int k) {  // for unpin
